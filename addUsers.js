@@ -7,12 +7,17 @@ const dotenv = require("dotenv").config();
 // Route: POST /user - Create Admin or Student (only admins can create accounts)
 router.post("/user", async (req, res) => {
   try {
-    const { email, password, idNumber, adminPassCode } = req.body;
+    const { fullName, email, password, idNumber, adminPassCode } = req.body;
     const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE;
 
     // ✅ Require passcode for both admins and students
     if (!adminPassCode || adminPassCode !== ADMIN_PASSCODE) {
       return res.status(403).json({ message: "Invalid admin passcode. Only admins can create accounts." });
+    }
+
+    // ✅ Validate full name
+    if (!fullName || fullName.trim().length < 3) {
+      return res.status(400).json({ message: "Full name is required and must be at least 3 characters." });
     }
 
     // ✅ Validate email format
@@ -52,7 +57,7 @@ router.post("/user", async (req, res) => {
 
     // ✅ Create user
     const newUser = new User({
-      name: "",
+      fullName, // ✅ Store full name
       email,
       password: hashedPassword,
       role,
@@ -65,6 +70,7 @@ router.post("/user", async (req, res) => {
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} account created successfully`,
       user: {
         id: newUser._id,
+        fullName: newUser.fullName,
         email: newUser.email,
         role: newUser.role,
         ...(isStudent && { idNumber: newUser.idNumber }),
