@@ -3,9 +3,10 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
-const { Post, User } = require("./database");
-
+const { Post, User, RecentActivity } = require("./database");
 const router = express.Router();
+
+
 
 // Multer config
 const storage = multer.diskStorage({
@@ -44,21 +45,28 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
 
-// ✅ POST /post/request — Create new post
 router.post("/requestPost", upload.single("media"), async (req, res) => {
   try {
-    console.log("some came")
     const { author, content, privacy } = req.body;
     const mediaPath = req.file ? `/uploads/${req.file.filename}` : null;
+
+    const mimetype = req.file?.mimetype;
+    const isVideo = mimetype?.startsWith("video");
 
     const newPost = new Post({
       author,
       content,
-      image: mediaPath,
+      image: isVideo ? null : mediaPath,
+      video: isVideo ? mediaPath : null,
       privacy,
     });
 
     await newPost.save();
+    const newActivity = new RecentActivity({
+      actionType:"post",
+      description:`New Post Requested`
+    })
+    await newActivity.save();
     res.status(200).json({ success: true, post: newPost });
   } catch (error) {
     console.error("Post upload failed:", error);
@@ -137,6 +145,13 @@ router.post("/approvePost", async (req, res) => {
     post.approved = true;
     await post.save();
 
+    const newActivity = new RecentActivity({
+      actionType:"post",
+      description:`${adminUser.fullName} approved a post`
+    })
+
+    await newActivity.save();
+
     // Fetch remaining pending posts
     const remainingPendingPosts = await Post.find({ approved: false })
       .populate("author", "fullName idNumber profilePic")
@@ -192,6 +207,13 @@ router.delete("/deletePost", async (req, res) => {
     // Get remaining pending posts after deletion
     const remainingPendingPosts = await Post.find({ approved: false }).populate("author");
 
+    const newActivity = new RecentActivity({
+      actionType:"post",
+      description:`${adminUser.fullName} deleted apost `
+    })
+
+    await newActivity.save();
+
     res.status(200).json({
       success: true,
       message: "Post deleted successfully.",
@@ -210,27 +232,40 @@ router.delete("/deletePost", async (req, res) => {
 
 router.post("/userFeed", async (req, res) => {
   try {
-    const  userId  = req.body.id;
+    const userId = req.body.id;
 
     if (!userId) {
-      return res.status(400).json({ success: false, message: "User ID is required." });
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID is required." });
     }
 
-    const user = await User.findById(userId).populate("following");
+    const user = await User.findById(userId)
+      .populate("following.user")
+      .lean(); // lean returns plain JS object, useful for adding custom props
+
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found." });
     }
 
-    const followingIds = user.following.map((f) => f._id);
+    const followingIds = user.following.map((f) => f.user?._id || f._id);
 
-    // Fetch different types of posts (followed, top-liked, recent)
+    const authorPopulate = {
+      path: "author",
+      select: "fullName email idNumber role profileImage"
+    };
+
     const followedPosts = await Post.find({
       author: { $in: followingIds, $ne: userId },
       approved: true,
     })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate("author");
+      .populate(authorPopulate);
+
+      console.log(followedPosts)
 
     const topLikedPosts = await Post.find({
       approved: true,
@@ -238,7 +273,7 @@ router.post("/userFeed", async (req, res) => {
     })
       .sort({ likes: -1 })
       .limit(10)
-      .populate("author");
+      .populate(authorPopulate);
 
     const recentPosts = await Post.find({
       approved: true,
@@ -246,12 +281,10 @@ router.post("/userFeed", async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate("author");
+      .populate(authorPopulate);
 
-    // Combine all posts
     const allPosts = [...followedPosts, ...topLikedPosts, ...recentPosts];
 
-    // Remove duplicates by post ID
     const uniquePostsMap = new Map();
     allPosts.forEach((post) => {
       uniquePostsMap.set(post._id.toString(), post);
@@ -259,12 +292,12 @@ router.post("/userFeed", async (req, res) => {
 
     const uniquePosts = Array.from(uniquePostsMap.values());
 
-    // Shuffle randomly
     const shuffledFeed = uniquePosts.sort(() => 0.5 - Math.random());
 
     res.status(200).json({
       success: true,
       feed: shuffledFeed,
+      savedPosts: user.savedPosts || [],
     });
   } catch (error) {
     console.error("Error fetching user feed:", error);
@@ -274,6 +307,8 @@ router.post("/userFeed", async (req, res) => {
     });
   }
 });
+
+
 
 
 
@@ -378,6 +413,13 @@ router.post("/addComment", async (req, res) => {
       }))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+      const newActivity = new RecentActivity({
+        actionType:"comment",
+        description:`${user.fullName} made a comment`
+      })
+  
+      await newActivity.save();
+
     res.status(200).json({
       success: true,
       message: "Comment added successfully.",
@@ -393,6 +435,104 @@ router.post("/addComment", async (req, res) => {
 });
 
 
+// ✅ POST /post/like — Like or unlike a post
+router.post("/like", async (req, res) => {
+  try {
+    const { postId, userId } = req.body;
+
+    if (!postId || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "postId and userId are required.",
+      });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found.",
+      });
+    }
+
+    const alreadyLiked = post.likes.includes(userId);
+
+    if (alreadyLiked) {
+      // Unlike
+      post.likes = post.likes.filter((id) => id.toString() !== userId);
+    } else {
+      // Like
+      post.likes.push(userId);
+    }
+
+    await post.save();
+
+    const likedByUser = post.likes.includes(userId); // updated like status
+
+    res.status(200).json({
+      success: true,
+      message: likedByUser ? "Post liked" : "Post unliked",
+      likesCount: post.likes.length,
+      likedByUser, // 🔥 Useful for frontend
+    });
+  } catch (error) {
+    console.error("Error liking/unliking post:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while processing the like.",
+    });
+  }
+});
+
+
+
+
+
+// ✅ POST /post/save — Save or unsave a post
+router.post("/save", async (req, res) => {
+  try {
+    const { userId, postId } = req.body;
+
+    if (!userId || !postId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId and postId are required.",
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    const alreadySaved = user.savedPosts.includes(postId);
+
+    if (alreadySaved) {
+      // Unsave post
+      user.savedPosts = user.savedPosts.filter((id) => id.toString() !== postId);
+    } else {
+      // Save post
+      user.savedPosts.push(postId);
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: alreadySaved ? "Post unsaved" : "Post saved",
+      savedPosts: user.savedPosts,
+    });
+  } catch (error) {
+    console.error("Error saving/unsaving post:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while saving the post.",
+    });
+  }
+});
 
 
 

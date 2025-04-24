@@ -1,12 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
-const { User } = require("./database");
+const { User, RecentActivity } = require("./database");
 const dotenv = require("dotenv").config();
 
 // Route: POST /user - Create Admin or Student (only admins can create accounts)
 router.post("/user", async (req, res) => {
   try {
+    console.log(req.body)
     const { fullName, email, password, idNumber, adminPassCode } = req.body;
     const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE;
 
@@ -23,12 +24,12 @@ router.post("/user", async (req, res) => {
     // ✅ Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || !emailRegex.test(email)) {
-      return res.status(400).json({ message: "Valid email is required." });
+      return res.status(400).json({ success:false,message: "Valid email is required." });
     }
 
     // ✅ Validate password
     if (!password) {
-      return res.status(400).json({ message: "Password is required." });
+      return res.status(400).json({success:false, message: "Password is required." });
     }
 
     // ✅ Determine role
@@ -39,7 +40,7 @@ router.post("/user", async (req, res) => {
     if (isStudent) {
       const idRegex = /^\d{11,12}$/;
       if (!idRegex.test(idNumber)) {
-        return res.status(400).json({ message: "ID number must be 11 or 12 digits long." });
+        return res.status(400).json({ success:false,message: "ID number must be 11 or 12 digits long." });
       }
     }
 
@@ -49,7 +50,7 @@ router.post("/user", async (req, res) => {
     );
 
     if (existingUser) {
-      return res.status(409).json({ message: "User with this email or ID number already exists." });
+      return res.status(409).json({success:false, message: "User with this email or ID number already exists." });
     }
 
     // ✅ Hash password
@@ -65,6 +66,12 @@ router.post("/user", async (req, res) => {
     });
 
     await newUser.save();
+    const newActivity = new RecentActivity({
+      description: `${newUser.role} account created by ${newUser.fullName}`,
+      actionType: `login`,
+    });
+
+    await newActivity.save();
 
     res.status(201).json({
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} account created successfully`,
@@ -78,8 +85,55 @@ router.post("/user", async (req, res) => {
     });
   } catch (err) {
     console.error("Error creating user:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({success:false, message: "Server error" });
   }
 });
+
+// Route: POST /user/change-password - Change password using user ID
+router.post("/changePassword", async (req, res) => {
+  try {
+    const { userId, currentPassword, newPassword } = req.body;
+
+    // Validate inputs
+    if (!userId || !currentPassword || !newPassword) {
+      return res.status(400).json({ success:false,message: "User ID, current password, and new password are required." });
+    }
+
+    // Find user by ID
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({success:false, message: "User not found." });
+    }
+
+    // Check current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({success:false, message: "Current password is incorrect." });
+    }
+
+    // Optional: Prevent using same password
+    const isSameAsOld = await bcrypt.compare(newPassword, user.password);
+    if (isSameAsOld) {
+      return res.status(400).json({success:false, message: "New password must be different from the current password." });
+    }
+
+    // Hash new password and update
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedNewPassword;
+    await user.save();
+    const newActivity = new RecentActivity({
+      actionType:"changePassword",
+      description:`${user.fullName} Changed their password`
+    })
+
+    await newActivity.save();
+
+    res.status(200).json({success:true, message: "Password changed successfully." });
+  } catch (err) {
+    console.error("Error changing password:", err);
+    res.status(500).json({success:false, message: "Server error" });
+  }
+});
+
 
 module.exports = router;

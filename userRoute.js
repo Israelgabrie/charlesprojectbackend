@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { User,Post } = require("./database");
+const { User,Post,Chat } = require("./database");
  
 
 const userRouter = express.Router();
@@ -12,10 +12,10 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 userRouter.get("/getLoggedInUser", async (req, res) => {
   try {
     const token = req.cookies.token;
-    console.log(req.cookie)
+    console.log("Cookies received:", req.cookies);
 
     if (!token) {
-      return res.status(401).json({success:false ,  message: "No authentication token found" });
+      return res.status(401).json({ success: false, message: "No authentication token found" });
     }
 
     // Verify token
@@ -23,27 +23,31 @@ userRouter.get("/getLoggedInUser", async (req, res) => {
     const user = await User.findById(decoded.id);
 
     if (!user) {
-      return res.status(404).json({success:false,  message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
     res.status(200).json({
-      success:true,
+      success: true,
       user: {
-        createdAt:user.createdAt,
+        profileImage:user.profileImage,
+        createdAt: user.createdAt,
         followers: user.followers,
         following: user.following,
         fullName: user.fullName,
         id: user._id,
         email: user.email,
         role: user.role,
+        savedPosts: user.savedPosts || [],
         ...(user.role === "student" && { idNumber: user.idNumber }),
       },
     });
   } catch (err) {
     console.error("Error getting logged in user:", err);
-    return res.status(500).json({success:false ,  message: "Invalid or expired token" });
+    return res.status(500).json({ success: false, message: "Invalid or expired token" });
   }
 });
+
+
 
 // POST /user/login
 userRouter.post("/login", async (req, res) => {
@@ -51,17 +55,17 @@ userRouter.post("/login", async (req, res) => {
     const { email, password, rememberMe } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({success:false,  message: "Email and password are required." });
+      return res.status(400).json({ success: false, message: "Email and password are required." });
     }
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(404).json({success:false,  message: "No account found with this email." });
+      return res.status(404).json({ success: false, message: "No account found with this email." });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ success:false, message: "Incorrect password." });
+      return res.status(401).json({ success: false, message: "Incorrect password." });
     }
 
     const token = jwt.sign(
@@ -70,33 +74,35 @@ userRouter.post("/login", async (req, res) => {
       { expiresIn: rememberMe ? "60d" : "10m" }
     );
 
-  
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: rememberMe ? 60 * 24 * 60 * 60 * 1000 : 10 * 60 * 1000,
+      maxAge: rememberMe ? 60 * 24 * 60 * 60 * 1000 : 10 * 60 * 1000, // 60 days or 10 minutes
     });
 
     res.status(200).json({
-      success:true,
+      success: true,
       message: "Login successful",
       user: {
-        createdAt:user.createdAt,
+        profileImage:user.profileImage,
+        createdAt: user.createdAt,
         followers: user.followers,
         following: user.following,
         fullName: user.fullName,
         id: user._id,
         email: user.email,
         role: user.role,
+        savedPosts: user.savedPosts || [],
         ...(user.role === "student" && { idNumber: user.idNumber }),
       },
     });
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({success:false, message: "Server error" });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 
 // POST /user/follow
@@ -105,18 +111,18 @@ userRouter.post("/follow", async (req, res) => {
     const { followerId, targetId } = req.body;
 
     if (!followerId || !targetId) {
-      return res.status(400).json({ success:false ,  message: "Both followerId and targetId are required." });
+      return res.status(400).json({ success: false, message: "Both followerId and targetId are required." });
     }
 
     if (followerId === targetId) {
-      return res.status(400).json({ success:false ,  message: "You cannot follow yourself." });
+      return res.status(400).json({ success: false, message: "You cannot follow yourself." });
     }
 
     const follower = await User.findById(followerId);
     const target = await User.findById(targetId);
 
     if (!follower || !target) {
-      return res.status(404).json({success:false,  message: "User not found." });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     // Check if already following
@@ -124,34 +130,73 @@ userRouter.post("/follow", async (req, res) => {
       (f) => f._id.toString() === targetId
     );
     if (isAlreadyFollowing) {
-      return res.status(400).json({success:false,  message: "Already following this user." });
+      return res.status(400).json({ success: false, message: "Already following this user." });
     }
 
-    // Add to each other's following/followers
-    follower.following.push({ _id: target._id ,approved:false});
-    target.followers.push({ _id: follower._id ,approved:false});
+    // Add target to follower's "following"
+    follower.following.push({ _id: target._id, approved: false });
+
+    // Check if follower already exists in target's "followers"
+    const targetFollowerEntry = target.followers.find(
+      (f) => f._id.toString() === followerId
+    );
+
+    if (targetFollowerEntry) {
+      // If the follower already exists in target's followers list (trying to follow back),
+      // update both entries to approved: true (mutual)
+      targetFollowerEntry.approved = true;
+
+      // Also find target in follower's following list and mark approved = true
+      const followerFollowingEntry = follower.following.find(
+        (f) => f._id.toString() === targetId
+      );
+      if (followerFollowingEntry) {
+        followerFollowingEntry.approved = true;
+      }
+
+      // Check if target is already following the follower (for their own following/followers symmetry)
+      const followerAsFollower = follower.followers.find(
+        (f) => f._id.toString() === targetId
+      );
+      if (followerAsFollower) {
+        followerAsFollower.approved = true;
+      }
+
+      const targetFollowingEntry = target.following.find(
+        (f) => f._id.toString() === followerId
+      );
+      if (targetFollowingEntry) {
+        targetFollowingEntry.approved = true;
+      }
+    } else {
+      // If not mutual yet, just add followerId to target's followers with approved: false
+      target.followers.push({ _id: follower._id, approved: false });
+    }
 
     await follower.save();
     await target.save();
 
     res.status(200).json({
-      success:true,
+      success: true,
       message: "Followed successfully.",
       updatedFollower: {
         id: follower._id,
         following: follower.following,
+        followers: follower.followers,
       },
       updatedTarget: {
         id: target._id,
         followers: target.followers,
+        following: target.following,
       },
     });
-    
+
   } catch (error) {
     console.error("Follow error:", error);
-    res.status(500).json({ success:false, message: "Server error while following user." });
+    res.status(500).json({ success: false, message: "Server error while following user." });
   }
 });
+
 
 
 // POST /user/unfollow
@@ -205,11 +250,9 @@ userRouter.post("/unfollow", async (req, res) => {
 });
 
 
-// ✅ Get user statistics
 userRouter.post("/stats", async (req, res) => {
   try {
     const { userId } = req.body;
-
     if (!userId) {
       return res.status(400).json({
         success: false,
@@ -217,8 +260,7 @@ userRouter.post("/stats", async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).populate("following followers");
-
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -226,24 +268,31 @@ userRouter.post("/stats", async (req, res) => {
       });
     }
 
-    const postCount = await Post.countDocuments({ author: userId, approved: true });
+    // Count entries that are subdocuments (regardless of any fields)
+    const countEntries = (arr) => Array.isArray(arr) ? arr.length : 0;
 
-    res.status(200).json({
-      success: true,
-      stats: {
-        postCount,
-        followingCount: user.following.length,
-        followerCount: user.followers.length,
-      },
+    const followingCount = countEntries(user.following);
+    const followerCount = countEntries(user.followers);
+
+    const postCount = await Post.countDocuments({
+      author: userId,
+      approved: true,
     });
-  } catch (error) {
-    console.error("Error fetching user stats:", error);
-    res.status(500).json({
+
+
+    return res.status(200).json({
+      success: true,
+      stats: { postCount, followingCount, followerCount },
+    });
+  } catch (err) {
+    console.error("Error fetching user stats:", err);
+    return res.status(500).json({
       success: false,
       message: "Failed to fetch user statistics.",
     });
   }
 });
+
 
 
 userRouter.post("/discover", async (req, res) => {
@@ -263,32 +312,63 @@ userRouter.post("/discover", async (req, res) => {
     const followingIds = currentUser.following.map((f) => f._id.toString());
     const followerIds = currentUser.followers.map((f) => f._id.toString());
 
-    // 1. People you're following where approved is false
+    // 1. Users you sent follow requests to (approved = false)
     const unapprovedFollowingIds = currentUser.following
       .filter((f) => f.approved === false)
       .map((f) => f._id);
 
     const unapprovedFollowing = await User.find({ _id: { $in: unapprovedFollowingIds } })
-      .select("fullName idNumber");
+      .select("fullName idNumber profileImage");
 
-    // 2. People you follow but they don't follow you back (non-mutual)
-    const nonMutualFollowingIds = followingIds.filter((id) => !followerIds.includes(id));
+    // 2. Users who sent you follow requests (approved = false)
+    const unapprovedFollowerIds = currentUser.followers
+      .filter((f) => f.approved === false)
+      .map((f) => f._id);
+
+    const unapprovedFollowers = await User.find({ _id: { $in: unapprovedFollowerIds } })
+      .select("fullName idNumber profileImage");
+
+    // 3. People you follow but who don't follow you back (non-mutual)
+    const mutualFollowerIds = currentUser.followers
+      .filter((f) => f.approved)
+      .map((f) => f._id.toString());
+
+    const nonMutualFollowingIds = currentUser.following
+      .filter((f) => !mutualFollowerIds.includes(f._id.toString()))
+      .map((f) => f._id);
 
     const nonMutualFollowing = await User.find({ _id: { $in: nonMutualFollowingIds } })
-      .select("fullName idNumber");
+      .select("fullName idNumber profileImage");
 
-    // 3. 10 random users excluding yourself
+    // 4. 10 random users excluding:
+    //    - the current user
+    //    - users with role "admin"
+    //    - users the current user follows
+    //    - users who follow the current user
+
+    const excludeUserIds = [
+      currentUser._id,
+      ...currentUser.following.map(f => f._id),
+      ...currentUser.followers.map(f => f._id)
+    ];
+
     const randomUsers = await User.aggregate([
-      { $match: { _id: { $ne: currentUser._id } } },
+      {
+        $match: {
+          _id: { $nin: excludeUserIds },
+          role: { $ne: "admin" }
+        }
+      },
       { $sample: { size: 10 } },
-      { $project: { fullName: 1, idNumber: 1 } }
+      { $project: { fullName: 1, idNumber: 1, profileImage: 1 } }
     ]);
 
     res.status(200).json({
       success: true,
       data: {
-        unapprovedFollowing,
-        nonMutualFollowing,
+        unapprovedFollowing,   // people you sent requests to
+        unapprovedFollowers,   // people who sent you requests
+        nonMutualFollowing,    // people you follow but don't follow back
         randomUsers,
       },
     });
@@ -298,6 +378,9 @@ userRouter.post("/discover", async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to load discover data." });
   }
 });
+
+
+
 
 
 // ✅ PATCH /user/approveFollow - Approve a pending follow request
@@ -322,13 +405,13 @@ userRouter.patch("/approveFollow", async (req, res) => {
       });
     }
 
-    // Update approved in target user's followers
+    // ✅ Update approval in `user.followers`
     const followerInUser = user.followers.find(f => f._id.toString() === followerId);
     if (followerInUser) {
       followerInUser.approved = true;
     }
 
-    // Update approved in follower's following
+    // ✅ Update approval in `follower.following`
     const userInFollower = follower.following.find(f => f._id.toString() === userId);
     if (userInFollower) {
       userInFollower.approved = true;
@@ -336,6 +419,52 @@ userRouter.patch("/approveFollow", async (req, res) => {
 
     await user.save();
     await follower.save();
+
+    // ✅ Check if both follow each other and are approved
+    const isMutuallyFollowingAndApproved = async (userId, targetId) => {
+      try {
+        const [user, target] = await Promise.all([
+          User.findById(userId).lean(),
+          User.findById(targetId).lean()
+        ]);
+
+        if (!user || !target) return false;
+
+        const userFollowsTarget = user.following.some(f =>
+          f._id.toString() === targetId && f.approved
+        );
+
+        const targetFollowsUser = target.following.some(f =>
+          f._id.toString() === userId && f.approved
+        );
+
+        return userFollowsTarget && targetFollowsUser;
+      } catch (err) {
+        console.error("Error checking mutual follow:", err);
+        return false;
+      }
+    };
+
+    const isMutual = await isMutuallyFollowingAndApproved(userId, followerId);
+    console.log("value of isMutual:", isMutual);
+
+    if (isMutual) {
+      // ✅ Avoid duplicate chat creation
+      const existingChat = await Chat.findOne({
+        participants: { $all: [userId, followerId], $size: 2 }
+      });
+
+      if (!existingChat) {
+        const newChat = new Chat({
+          participants: [userId, followerId]
+        });
+
+        await newChat.save();
+        console.log("New mutual chat created");
+      } else {
+        console.log("Chat already exists");
+      }
+    }
 
     res.status(200).json({
       success: true,
@@ -350,6 +479,65 @@ userRouter.patch("/approveFollow", async (req, res) => {
   }
 });
 
+userRouter.post("/posts", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is required." });
+    }
+
+    const posts = await Post.find({ author: userId })
+      .populate("author", "fullName idNumber profileImage")
+      .sort({ createdAt: -1 });
+
+    if (!posts.length) {
+      return res.status(404).json({ success: false, message: "No posts found." });
+    }
+
+    res.status(200).json({
+      success: true,
+      posts,
+    });
+  } catch (error) {
+    console.error("Error fetching posts:", error);
+    res.status(500).json({ success: false, message: "Server error while fetching posts." });
+  }
+});
+
+
+userRouter.post("/savedPosts", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is required." });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    const savedPosts = await Post.find({
+      _id: { $in: user.savedPosts }
+    })
+      .populate("author", "fullName idNumber profileImage")
+      .sort({ createdAt: -1 });
+
+    if (!savedPosts.length) {
+      return res.status(404).json({ success: false, message: "No saved posts found." });
+    }
+
+    res.status(200).json({
+      success: true,
+      savedPosts,
+    });
+  } catch (error) {
+    console.error("Error fetching saved posts:", error);
+    res.status(500).json({ success: false, message: "Server error while fetching saved posts." });
+  }
+});
 
 
 
