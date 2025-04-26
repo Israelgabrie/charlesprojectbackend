@@ -1,78 +1,105 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const userSchema = new mongoose.Schema({
-  fullName: { type: String, required: true },
-  name: String,
-  email: { type: String, unique: true, required: true },
-  password: String,
-  idNumber: { type: String, unique: true },
-  role: { type: String, enum: ['student', 'admin'], default: 'student' },
-  bio: String,
-  profileImage: String,
-  following: [{
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    approved: { type: Boolean, default: false }
-  }],
-  followers: [{
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    approved: { type: Boolean, default: false }
-  }],
-  savedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Post' }] // ✅ NEW
-}, { timestamps: true });
+const userSchema = new mongoose.Schema(
+  {
+    fullName: { type: String, required: true },
+    name: String,
+    email: { type: String, unique: true, required: true },
+    password: String,
+    idNumber: { type: String, unique: true },
+    role: { type: String, enum: ["student", "admin"], default: "student" },
+    bio: String,
+    profileImage: String,
+    following: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        approved: { type: Boolean, default: false },
+      },
+    ],
+    followers: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        approved: { type: Boolean, default: false },
+      },
+    ],
+    active: { type: Boolean, default: false }, // Is the user currently online?
+    lastSeen: { type: Date, default: null }, // When was the user last active?
 
+    savedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Post" }],
+  },
+  { timestamps: true }
+);
 
-const User = mongoose.model('User', userSchema);
+const User = mongoose.model("User", userSchema);
 
-const postSchema = new mongoose.Schema({
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  content: String,
-  image: String,
-  video: String, // <- NEW
-  approved: { type: Boolean, default: false },
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  comments: [
-    {
-      commenter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      name: String,
-      text: String,
-      time: { type: Date, default: Date.now },
-    },
-  ],
-}, { timestamps: true });
+const postSchema = new mongoose.Schema(
+  {
+    author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    content: String,
+    image: String,
+    video: String, // <- NEW
+    approved: { type: Boolean, default: false },
+    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    comments: [
+      {
+        commenter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        name: String,
+        text: String,
+        time: { type: Date, default: Date.now },
+      },
+    ],
+  },
+  { timestamps: true }
+);
 
+const Post = mongoose.model("Post", postSchema);
 
-const Post = mongoose.model('Post', postSchema);
+const chatSchema = new mongoose.Schema(
+  {
+    participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: "Message" },
+  },
+  { timestamps: true }
+);
 
-const chatSchema = new mongoose.Schema({
-  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' }
-}, { timestamps: true });
+const Chat = mongoose.model("Chat", chatSchema);
 
-const Chat = mongoose.model('Chat', chatSchema);
+const messageSchema = new mongoose.Schema(
+  {
+    chat: { type: mongoose.Schema.Types.ObjectId, ref: "Chat" },
+    sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    content: String,
+    image: String,
+    video: String,
+    file: String,
+  },
+  { timestamps: true }
+);
 
-const messageSchema = new mongoose.Schema({
-  chat: { type: mongoose.Schema.Types.ObjectId, ref: 'Chat' },
-  sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  content: String,
-  image: String,
-  video: String,
-  file: String
-}, { timestamps: true });
-
-const Message = mongoose.model('Message', messageSchema);
-
+const Message = mongoose.model("Message", messageSchema);
 
 const recentActivitySchema = new mongoose.Schema({
   description: { type: String, required: true },
   actionType: {
     type: String,
-    enum: ["post", "comment", "like", "follow", "report", "login","changePassword","newPic"],
-    required: true
+    enum: [
+      "post",
+      "comment",
+      "like",
+      "follow",
+      "report",
+      "login",
+      "changePassword",
+      "newPic",
+      "delete",
+      "signUp"
+    ],
+    required: true,
   },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
 });
 
-const RecentActivity = mongoose.model('recentActivity', recentActivitySchema);
+const RecentActivity = mongoose.model("recentActivity", recentActivitySchema);
 
 const reportSchema = new mongoose.Schema({
   text: { type: String, required: true },
@@ -81,9 +108,7 @@ const reportSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 });
 
-
-const Report = mongoose.model('Report', reportSchema);
-
+const Report = mongoose.model("Report", reportSchema);
 
 module.exports = {
   User,

@@ -68,7 +68,7 @@ router.post("/user", async (req, res) => {
     await newUser.save();
     const newActivity = new RecentActivity({
       description: `${newUser.role} account created by ${newUser.fullName}`,
-      actionType: `login`,
+      actionType: `signUp`,
     });
 
     await newActivity.save();

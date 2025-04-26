@@ -242,7 +242,7 @@ router.post("/userFeed", async (req, res) => {
 
     const user = await User.findById(userId)
       .populate("following.user")
-      .lean(); // lean returns plain JS object, useful for adding custom props
+      .lean();
 
     if (!user) {
       return res
@@ -263,9 +263,8 @@ router.post("/userFeed", async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate(authorPopulate);
-
-      console.log(followedPosts)
+      .populate(authorPopulate)
+      .lean();
 
     const topLikedPosts = await Post.find({
       approved: true,
@@ -273,7 +272,8 @@ router.post("/userFeed", async (req, res) => {
     })
       .sort({ likes: -1 })
       .limit(10)
-      .populate(authorPopulate);
+      .populate(authorPopulate)
+      .lean();
 
     const recentPosts = await Post.find({
       approved: true,
@@ -281,7 +281,8 @@ router.post("/userFeed", async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate(authorPopulate);
+      .populate(authorPopulate)
+      .lean();
 
     const allPosts = [...followedPosts, ...topLikedPosts, ...recentPosts];
 
@@ -291,6 +292,27 @@ router.post("/userFeed", async (req, res) => {
     });
 
     const uniquePosts = Array.from(uniquePostsMap.values());
+
+    // Enrich comments with profile images and full names
+    await Promise.all(
+      uniquePosts.map(async (post) => {
+        const enrichedComments = await Promise.all(
+          (post.comments || []).map(async (comment) => {
+            if (!comment.commenter) return comment;
+
+            const commenterUser = await User.findById(comment.commenter).select("profileImage fullName");
+
+            return {
+              ...comment,
+              profileImage: commenterUser?.profileImage || null,
+              commenterName: commenterUser?.fullName || comment.name,
+            };
+          })
+        );
+
+        post.comments = enrichedComments;
+      })
+    );
 
     const shuffledFeed = uniquePosts.sort(() => 0.5 - Math.random());
 
@@ -310,8 +332,6 @@ router.post("/userFeed", async (req, res) => {
 
 
 
-
-
 // ✅ POST /post/getComments — Get all comments for a post
 router.post("/getComments", async (req, res) => {
   try {
@@ -325,7 +345,7 @@ router.post("/getComments", async (req, res) => {
     }
 
     const post = await Post.findById(postId)
-      .populate("comments.commenter", "fullName profilePic")
+      .populate("comments.commenter", "fullName profileImage")
       .lean();
 
     if (!post) {
@@ -336,10 +356,12 @@ router.post("/getComments", async (req, res) => {
       });
     }
 
-    // Ensure comment structure is consistent and sorted (latest first)
+    // Map and sort comments by most recent
     const comments = (post.comments || [])
       .map((c) => ({
-        user: c.commenter,
+        userId: c.commenter?._id || null,
+        fullName: c.commenter?.fullName || "Unknown",
+        profileImage: c.commenter?.profileImage || null,
         comment: c.text,
         createdAt: c.time,
       }))
@@ -358,6 +380,7 @@ router.post("/getComments", async (req, res) => {
     });
   }
 });
+
 
 
 
@@ -402,23 +425,26 @@ router.post("/addComment", async (req, res) => {
 
     // Fetch updated comments with populated commenter info
     const updatedPost = await Post.findById(postId)
-      .populate("comments.commenter", "fullName profilePic")
+      .populate("comments.commenter", "fullName profileImage")
       .lean();
 
     const updatedComments = (updatedPost.comments || [])
       .map((c) => ({
-        user: c.commenter,
+        userId: c.commenter?._id || null,
+        fullName: c.commenter?.fullName || "Unknown",
+        profileImage: c.commenter?.profileImage || null,
         comment: c.text,
         createdAt: c.time,
       }))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-      const newActivity = new RecentActivity({
-        actionType:"comment",
-        description:`${user.fullName} made a comment`
-      })
-  
-      await newActivity.save();
+    // Log activity
+    const newActivity = new RecentActivity({
+      actionType: "comment",
+      description: `${user.fullName} made a comment`,
+    });
+
+    await newActivity.save();
 
     res.status(200).json({
       success: true,
@@ -433,6 +459,7 @@ router.post("/addComment", async (req, res) => {
     });
   }
 });
+
 
 
 // ✅ POST /post/like — Like or unlike a post

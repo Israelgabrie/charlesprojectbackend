@@ -60,13 +60,29 @@ chatRouter.post("/getChats", async (req, res) => {
 });
 
 
-// Route to get all messages of a specific chat
 chatRouter.post("/getMessages", async (req, res) => {
-  const { chatId } = req.body;
+  const { chatId, userId } = req.body;
 
-  if (!chatId) return res.status(400).json({ error: "Chat ID is required" ,message:"Chat ID is required"});
+  if (!chatId || !userId) {
+    return res.status(400).json({ success: false, message: "Chat ID and User ID are required" });
+  }
 
   try {
+    // 1. Find the chat
+    const chat = await Chat.findById(chatId);
+
+    if (!chat) {
+      return res.status(404).json({ success: false, message: "Chat not found" });
+    }
+
+    // 2. Check if user is a participant
+    const isParticipant = chat.participants.some(participantId => participantId.equals(userId));
+
+    if (!isParticipant) {
+      return res.status(403).json({ success: false, message: "Access denied: You are not a participant of this chat" });
+    }
+
+    // 3. Fetch messages if user is allowed
     const messages = await Message.find({ chat: chatId })
       .populate({
         path: "sender",
@@ -86,10 +102,11 @@ chatRouter.post("/getMessages", async (req, res) => {
       seenBy: msg.seenBy,
     }));
 
-    res.json({ success: true, messages: formattedMessages ,message:"Messages fetched successfully"});
+    res.json({ success: true, messages: formattedMessages, message: "Messages fetched successfully" });
   } catch (error) {
-    res.status(500).json({ success: false, error: "Failed to fetch messages", details: error.message,message:error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 module.exports = chatRouter;

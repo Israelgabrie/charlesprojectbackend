@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { User,Post,Chat } = require("./database");
+const { User,Post,Chat, RecentActivity } = require("./database");
  
 
 const userRouter = express.Router();
@@ -12,7 +12,6 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 userRouter.get("/getLoggedInUser", async (req, res) => {
   try {
     const token = req.cookies.token;
-    console.log("Cookies received:", req.cookies);
 
     if (!token) {
       return res.status(401).json({ success: false, message: "No authentication token found" });
@@ -80,6 +79,13 @@ userRouter.post("/login", async (req, res) => {
       sameSite: "strict",
       maxAge: rememberMe ? 60 * 24 * 60 * 60 * 1000 : 10 * 60 * 1000, // 60 days or 10 minutes
     });
+
+     const newActivity = new RecentActivity({
+          actionType:"login",
+          description:`${user.fullName} Logged In `
+        })
+    
+        await newActivity.save();
 
     res.status(200).json({
       success: true,
