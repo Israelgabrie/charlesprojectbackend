@@ -254,7 +254,7 @@ async function startServer() {
       });
 
       socket.on("setActive", async (userId, callback) => {
-        console.log("setting user active", userId);
+        console.log("interval setting user active", userId);
         io.emit("newUserOnline", userId); // Notifies all users
         handleActiveChat(io, socket, userId, callback);
       });

@@ -1,5 +1,5 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
+const bcrypt = require('bcryptjs');
 const jwt = require("jsonwebtoken");
 const { User,Post,Chat, RecentActivity } = require("./database");
  
@@ -12,7 +12,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 userRouter.get("/getLoggedInUser", async (req, res) => {
   try {
     const token = req.cookies.token;
-
+    console.log(req.cookies)
     if (!token) {
       return res.status(401).json({ success: false, message: "No authentication token found" });
     }
@@ -390,7 +390,7 @@ userRouter.post("/discover", async (req, res) => {
 
 
 // ✅ PATCH /user/approveFollow - Approve a pending follow request
-userRouter.patch("/approveFollow", async (req, res) => {
+userRouter.post("/approveFollow", async (req, res) => {
   try {
     const { userId, followerId } = req.body;
 

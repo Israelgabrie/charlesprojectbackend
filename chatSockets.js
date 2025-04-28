@@ -32,22 +32,31 @@ async function addMessage(requestBody, callback, io, socket) {
     }
 
     const chat = await Chat.findById(chatId);
-    if (!chat) return callback({ success: false, message: "Chat not found" });
+    if (!chat) {
+      return callback({ success: false, message: "Chat not found" });
+    }
 
     const receiverId = chat.participants.find(
       (id) => id.toString() !== userId.toString()
     );
-    if (!receiverId)
+    if (!receiverId) {
       return callback({ success: false, message: "Receiver not found" });
+    }
 
     const roomName = getRoomName(userId, receiverId);
+
+    // No need to socket.join(roomName) here anymore!
+    // Sockets should have already joined at login/setup time.
+
     const newMessage = new Message({ chat: chatId, sender: userId });
 
     if (type === "text") newMessage.content = value;
     else if (type === "image") newMessage.image = value;
     else if (type === "video") newMessage.video = value;
     else if (type === "file") newMessage.file = value;
-    else return callback({ success: false, message: "Invalid message type" });
+    else {
+      return callback({ success: false, message: "Invalid message type" });
+    }
 
     await newMessage.save();
     await Chat.findByIdAndUpdate(chatId, { lastMessage: newMessage._id });
@@ -57,7 +66,6 @@ async function addMessage(requestBody, callback, io, socket) {
       "_id fullName"
     );
 
-    socket.join(roomName);
     io.to(roomName).emit("newMessage", {
       senderId: userId,
       receiverId,
@@ -159,6 +167,8 @@ async function handleInactiveChat(io, socket, userId, callback) {
       active: false,
       lastSeen: new Date(),
     });
+    console.log(`setting user ${user.fullName} inactive`)
+
 
     const chats = await Chat.find({ participants: userId });
 
