@@ -209,7 +209,7 @@ app.post("/deleteUser", async (req, res) => {
 
 async function startServer() {
   try {
-    await mongoose.connect("mongodb://localhost:27017/campusConnect");
+    await mongoose.connect("mongodb+srv://isrealgab3a:isreal2005@cluster0.k8jva.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0");
     console.log("✅ Connected to MongoDB");
 
     const server = app.listen(portNumber, () => {
