@@ -7,14 +7,9 @@ const dotenv = require("dotenv").config();
 // Route: POST /user - Create Admin or Student (only admins can create accounts)
 router.post("/user", async (req, res) => {
   try {
-    console.log(req.body)
+    console.log(req.body);
     const { fullName, email, password, idNumber, adminPassCode } = req.body;
     const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE;
-
-    // ✅ Require passcode for both admins and students
-    if (!adminPassCode || adminPassCode !== ADMIN_PASSCODE) {
-      return res.status(403).json({ message: "Invalid admin passcode. Only admins can create accounts." });
-    }
 
     // ✅ Validate full name
     if (!fullName || fullName.trim().length < 3) {
@@ -24,54 +19,60 @@ router.post("/user", async (req, res) => {
     // ✅ Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || !emailRegex.test(email)) {
-      return res.status(400).json({ success:false,message: "Valid email is required." });
+      return res.status(400).json({ success: false, message: "Valid email is required." });
     }
 
     // ✅ Validate password
     if (!password) {
-      return res.status(400).json({success:false, message: "Password is required." });
+      return res.status(400).json({ success: false, message: "Password is required." });
     }
 
     // ✅ Determine role
     const isStudent = !!idNumber;
     const role = isStudent ? "student" : "admin";
 
+    // ✅ If admin, validate passcode
+    if (!isStudent) {
+      if (!adminPassCode || adminPassCode !== ADMIN_PASSCODE) {
+        return res.status(403).json({ success: false, message: "Invalid admin passcode. Only valid admins can create admin accounts." });
+      }
+    }
+
     // ✅ Validate ID number if student
     if (isStudent) {
       const idRegex = /^\d{11,12}$/;
       if (!idRegex.test(idNumber)) {
-        return res.status(400).json({ success:false,message: "ID number must be 11 or 12 digits long." });
+        return res.status(400).json({ success: false, message: "ID number must be 11 or 12 digits long." });
       }
     }
 
-    // ✅ Check if user already exists
+    // ✅ Check for duplicates
     const existingUser = await User.findOne(
       isStudent ? { $or: [{ email }, { idNumber }] } : { email }
     );
-
     if (existingUser) {
-      return res.status(409).json({success:false, message: "User with this email or ID number already exists." });
+      return res.status(409).json({ success: false, message: "User with this email or ID number already exists." });
     }
 
     // ✅ Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ✅ Create user
+    // ✅ Create user with appropriate approval status
     const newUser = new User({
-      fullName, // ✅ Store full name
+      fullName,
       email,
       password: hashedPassword,
       role,
+      isApproved: isStudent ? false : true,
       ...(isStudent && { idNumber }),
     });
 
     await newUser.save();
-    const newActivity = new RecentActivity({
-      description: `${newUser.role} account created by ${newUser.fullName}`,
-      actionType: `signUp`,
-    });
 
-    await newActivity.save();
+    await RecentActivity.create({
+      description: `${newUser.role} account created by ${newUser.fullName}`,
+      actionType: "signUp",
+    });
 
     res.status(201).json({
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} account created successfully`,
@@ -80,14 +81,16 @@ router.post("/user", async (req, res) => {
         fullName: newUser.fullName,
         email: newUser.email,
         role: newUser.role,
+        isApproved: newUser.isApproved,
         ...(isStudent && { idNumber: newUser.idNumber }),
       },
     });
   } catch (err) {
     console.error("Error creating user:", err);
-    res.status(500).json({success:false, message: "Server error" });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 // Route: POST /user/change-password - Change password using user ID
 router.post("/changePassword", async (req, res) => {

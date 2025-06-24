@@ -2,11 +2,67 @@ const express = require("express");
 const bcrypt = require('bcryptjs');
 const jwt = require("jsonwebtoken");
 const { User,Post,Chat, RecentActivity } = require("./database");
+
+
  
 
 const userRouter = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+
+
+// ✅ Admin route to change a user's password and invalidate their session
+// ✅ Admin route to change a user's password and clear their JWT
+userRouter.post("/admin/changeUserPassword", async (req, res) => {
+  try {
+    console.log("Change User Password Request:", req.body);
+    const { adminId, studentEmail, newPassword } = req.body;
+
+
+
+    if (!adminId || !studentEmail || !newPassword) {
+      return res.status(400).json({ success: false, message: "Missing required fields." });
+    }
+
+    const admin = await User.findById(adminId);
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Unauthorized. Only admins can change passwords." });
+    }
+
+    // ✅ Case-insensitive email match
+    const user = await User.findOne({ email: new RegExp(`^${studentEmail}$`, "i") });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Student with this email not found." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+
+    // Optional: Invalidate previous tokens if you're using token versioning or passwordUpdatedAt
+    // user.passwordUpdatedAt = new Date(); // Uncomment if implemented
+
+    await user.save();
+
+    // This clears cookie on current request, not their browser — token invalidation needs logic like passwordUpdatedAt
+    res.clearCookie("token");
+
+    const activity = new RecentActivity({
+      actionType: "security",
+      description: `Admin ${admin.fullName} changed password for ${user.fullName}`,
+    });
+    await activity.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Password for ${user.fullName} changed successfully.`,
+    });
+  } catch (err) {
+    console.error("Error changing user password:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
 
 // ✅ GET /getLoggedInUser - Retrieves currently logged-in user using JWT from cookies
 userRouter.get("/getLoggedInUser", async (req, res) => {
@@ -53,11 +109,15 @@ userRouter.post("/login", async (req, res) => {
   try {
     const { email, password, rememberMe } = req.body;
 
+    const allUsers = await User.find({});
+    console.log("All users in the database:", allUsers);
+
     if (!email || !password) {
       return res.status(400).json({ success: false, message: "Email and password are required." });
     }
 
     const user = await User.findOne({ email });
+    // removed !user?.isApproved // to allow login for unapproved users
     if (!user) {
       return res.status(404).json({ success: false, message: "No account found with this email." });
     }
@@ -386,10 +446,6 @@ userRouter.post("/discover", async (req, res) => {
 });
 
 
-
-
-
-// ✅ PATCH /user/approveFollow - Approve a pending follow request
 userRouter.post("/approveFollow", async (req, res) => {
   try {
     const { userId, followerId } = req.body;
@@ -401,8 +457,10 @@ userRouter.post("/approveFollow", async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId);
-    const follower = await User.findById(followerId);
+    const [user, follower] = await Promise.all([
+      User.findById(userId),
+      User.findById(followerId),
+    ]);
 
     if (!user || !follower) {
       return res.status(404).json({
@@ -411,79 +469,43 @@ userRouter.post("/approveFollow", async (req, res) => {
       });
     }
 
-    // ✅ Update approval in `user.followers`
-    const followerInUser = user.followers.find(f => f._id.toString() === followerId);
-    if (followerInUser) {
+    // ✅ Approve follower in user's followers
+    const followerInUser = user?.followers?.find(f => f._id?.toString() === followerId);
+    if (followerInUser && !followerInUser.approved) {
       followerInUser.approved = true;
     }
 
-    // ✅ Update approval in `follower.following`
-    const userInFollower = follower.following.find(f => f._id.toString() === userId);
-    if (userInFollower) {
+    // ✅ Approve user in follower's following
+    const userInFollower = follower?.following?.find(f => f._id?.toString() === userId);
+    if (userInFollower && !userInFollower.approved) {
       userInFollower.approved = true;
     }
 
-    await user.save();
-    await follower.save();
+    await Promise.all([user.save(), follower.save()]);
 
-    // ✅ Check if both follow each other and are approved
-    const isMutuallyFollowingAndApproved = async (userId, targetId) => {
-      try {
-        const [user, target] = await Promise.all([
-          User.findById(userId).lean(),
-          User.findById(targetId).lean()
-        ]);
+    // ✅ Check if follower now has approved access to user — if yes, create chat
+    const chatExists = await Chat.findOne({
+      participants: { $all: [userId, followerId], $size: 2 },
+    });
 
-        if (!user || !target) return false;
-
-        const userFollowsTarget = user.following.some(f =>
-          f._id.toString() === targetId && f.approved
-        );
-
-        const targetFollowsUser = target.following.some(f =>
-          f._id.toString() === userId && f.approved
-        );
-
-        return userFollowsTarget && targetFollowsUser;
-      } catch (err) {
-        console.error("Error checking mutual follow:", err);
-        return false;
-      }
-    };
-
-    const isMutual = await isMutuallyFollowingAndApproved(userId, followerId);
-    console.log("value of isMutual:", isMutual);
-
-    if (isMutual) {
-      // ✅ Avoid duplicate chat creation
-      const existingChat = await Chat.findOne({
-        participants: { $all: [userId, followerId], $size: 2 }
-      });
-
-      if (!existingChat) {
-        const newChat = new Chat({
-          participants: [userId, followerId]
-        });
-
-        await newChat.save();
-        console.log("New mutual chat created");
-      } else {
-        console.log("Chat already exists");
-      }
+    if (!chatExists) {
+      await Chat.create({ participants: [userId, followerId] });
+      console.log("✅ Chat created immediately after approval.");
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Follow request approved successfully.",
+      message: "Follow request approved and chat available.",
     });
   } catch (error) {
-    console.error("Error approving follow request:", error);
-    res.status(500).json({
+    console.error("❌ Error in approveFollow:", error);
+    return res.status(500).json({
       success: false,
       message: "Server error while approving follow request.",
     });
   }
 });
+
 
 userRouter.post("/posts", async (req, res) => {
   try {

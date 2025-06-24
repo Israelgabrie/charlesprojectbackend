@@ -6,8 +6,6 @@ const multer = require("multer");
 const { Post, User, RecentActivity } = require("./database");
 const router = express.Router();
 
-
-
 // Multer config
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -25,13 +23,49 @@ const storage = multer.diskStorage({
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "video/mp4",
-    "video/mpeg",
-    "video/quicktime",
+    // ✅ Common Image Types
+    "image/jpeg", // .jpeg, .jpg
+    "image/png", // .png
+    "image/gif", // .gif
+    "image/webp", // .webp
+    "image/avif", // .avif
+    "image/apng", // .apng
+    "image/svg+xml", // .svg
+    "image/bmp", // .bmp
+    "image/x-icon", // .ico
+    "image/tiff", // .tiff, .tif
+    "image/heif", // .heif
+    "image/heic", // .heic
+
+    // ✅ Common Video Types
+    "video/mp4", // .mp4
+    "video/webm", // .webm
+    "video/ogg", // .ogv
+    "video/quicktime", // .mov
+    "video/x-msvideo", // .avi
+    "video/x-matroska", // .mkv
+    "video/mpeg", // .mpeg
+    "video/3gpp", // .3gp
+    "video/3gpp2", // .3g2
+    "video/x-flv", // .flv
+    "video/x-ms-wmv", // .wmv
+
+    // ✅ Less common, still supported formats
+    "image/x-png", // legacy PNG
+    "image/x-bmp", // alternate BMP
+    "image/vnd.microsoft.icon", // alternate ICO
+    "image/emf", // Enhanced Metafile (Windows)
+    "image/wmf", // Windows Metafile
+
+    // ✅ Optional exotic video formats (some require fallbacks)
+    "video/x-ms-asf", // .asf
+    "video/x-ms-vob", // .vob
+    "video/x-dv", // .dv
+
+    // ✅ For robust support
+    "application/octet-stream", // generic fallback (⚠️ use cautiously)
   ];
+
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
@@ -44,14 +78,23 @@ const upload = multer({
   fileFilter,
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
-
 router.post("/requestPost", upload.single("media"), async (req, res) => {
   try {
-    const { author, content, privacy } = req.body;
+    const { author, content, privacy, postType, priority } = req.body;
     const mediaPath = req.file ? `/uploads/${req.file.filename}` : null;
 
     const mimetype = req.file?.mimetype;
     const isVideo = mimetype?.startsWith("video");
+
+    const user = await User.findById(author);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Author not found" });
+    }
+
+    const isAdmin = user.role === "admin";
+    const autoApprove = isAdmin || user.canAutoPost;
 
     const newPost = new Post({
       author,
@@ -59,22 +102,30 @@ router.post("/requestPost", upload.single("media"), async (req, res) => {
       image: isVideo ? null : mediaPath,
       video: isVideo ? mediaPath : null,
       privacy,
+      postType: postType || "normal", // 🆕 Optional, default to "normal"
+      priority: priority || "normal", // 🆕 Optional, default to "normal"
+      approved: autoApprove,
+      approvedBy: autoApprove ? user._id : null,
+      approvedAt: autoApprove ? new Date() : null,
     });
 
     await newPost.save();
+
     const newActivity = new RecentActivity({
-      actionType:"post",
-      description:`New Post Requested`
-    })
+      actionType: "post",
+      description: autoApprove
+        ? `${user.fullName} created an auto-approved post`
+        : `New post requested by ${user.fullName}`,
+    });
+
     await newActivity.save();
+
     res.status(200).json({ success: true, post: newPost });
   } catch (error) {
     console.error("Post upload failed:", error);
     res.status(500).json({ success: false, error: "Failed to create post" });
   }
 });
-
-
 
 // ✅ POST /post/pending — Get all pending posts (admin only)
 router.post("/pending", async (req, res) => {
@@ -108,7 +159,6 @@ router.post("/pending", async (req, res) => {
     });
   }
 });
-
 
 // ✅ POST /post/approvePost — Approve a pending post (admin only)
 router.post("/approvePost", async (req, res) => {
@@ -146,9 +196,9 @@ router.post("/approvePost", async (req, res) => {
     await post.save();
 
     const newActivity = new RecentActivity({
-      actionType:"post",
-      description:`${adminUser.fullName} approved a post`
-    })
+      actionType: "post",
+      description: `${adminUser.fullName} approved a post`,
+    });
 
     await newActivity.save();
 
@@ -172,7 +222,6 @@ router.post("/approvePost", async (req, res) => {
     });
   }
 });
-
 
 // ✅ DELETE /post/deletePost — Delete a pending post (admin only)
 router.delete("/deletePost", async (req, res) => {
@@ -205,12 +254,14 @@ router.delete("/deletePost", async (req, res) => {
     await Post.findByIdAndDelete(postId);
 
     // Get remaining pending posts after deletion
-    const remainingPendingPosts = await Post.find({ approved: false }).populate("author");
+    const remainingPendingPosts = await Post.find({ approved: false }).populate(
+      "author"
+    );
 
     const newActivity = new RecentActivity({
-      actionType:"post",
-      description:`${adminUser.fullName} deleted apost `
-    })
+      actionType: "post",
+      description: `${adminUser.fullName} deleted apost `,
+    });
 
     await newActivity.save();
 
@@ -228,22 +279,16 @@ router.delete("/deletePost", async (req, res) => {
   }
 });
 
-
-
 router.post("/userFeed", async (req, res) => {
   try {
     const userId = req.body.id;
-
     if (!userId) {
       return res
         .status(400)
         .json({ success: false, message: "User ID is required." });
     }
 
-    const user = await User.findById(userId)
-      .populate("following.user")
-      .lean();
-
+    const user = await User.findById(userId).populate("following.user").lean();
     if (!user) {
       return res
         .status(404)
@@ -251,11 +296,22 @@ router.post("/userFeed", async (req, res) => {
     }
 
     const followingIds = user.following.map((f) => f.user?._id || f._id);
-
     const authorPopulate = {
       path: "author",
-      select: "fullName email idNumber role profileImage"
+      select: "fullName email idNumber role profileImage",
     };
+
+    const now = new Date();
+    const oneDayAgo = new Date(now.setDate(now.getDate() - 1));
+
+    const priorityAdminPosts = await Post.find({
+      approved: true,
+      postType: "announcement",
+      priority: "urgent",
+      createdAt: { $gte: oneDayAgo },
+    })
+      .populate(authorPopulate)
+      .lean();
 
     const followedPosts = await Post.find({
       author: { $in: followingIds, $ne: userId },
@@ -284,37 +340,27 @@ router.post("/userFeed", async (req, res) => {
       .populate(authorPopulate)
       .lean();
 
-    const allPosts = [...followedPosts, ...topLikedPosts, ...recentPosts];
+    const allPosts = [
+      ...priorityAdminPosts,
+      ...followedPosts,
+      ...topLikedPosts,
+      ...recentPosts,
+    ];
 
     const uniquePostsMap = new Map();
-    allPosts.forEach((post) => {
-      uniquePostsMap.set(post._id.toString(), post);
-    });
+    allPosts.forEach((post) => uniquePostsMap.set(post._id.toString(), post));
+    let uniquePosts = Array.from(uniquePostsMap.values());
 
-    const uniquePosts = Array.from(uniquePostsMap.values());
+    // 🧠 Only count comments, don’t include full list
+    uniquePosts = uniquePosts.map((post) => ({
+      ...post,
+      commentCount: post.comments?.length || 0,
+      comments: undefined,
+    }));
 
-    // Enrich comments with profile images and full names
-    await Promise.all(
-      uniquePosts.map(async (post) => {
-        const enrichedComments = await Promise.all(
-          (post.comments || []).map(async (comment) => {
-            if (!comment.commenter) return comment;
-
-            const commenterUser = await User.findById(comment.commenter).select("profileImage fullName");
-
-            return {
-              ...comment,
-              profileImage: commenterUser?.profileImage || null,
-              commenterName: commenterUser?.fullName || comment.name,
-            };
-          })
-        );
-
-        post.comments = enrichedComments;
-      })
-    );
-
-    const shuffledFeed = uniquePosts.sort(() => 0.5 - Math.random());
+    const shuffledFeed = uniquePosts
+      .sort(() => 0.5 - Math.random())
+      .slice(0, 20);
 
     res.status(200).json({
       success: true,
@@ -330,7 +376,55 @@ router.post("/userFeed", async (req, res) => {
   }
 });
 
+router.post("/moreFeed", async (req, res) => {
+  try {
+    const { id: userId, before } = req.body;
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID is required." });
+    }
 
+    const user = await User.findById(userId).populate("following.user").lean();
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found." });
+    }
+
+    const authorPopulate = {
+      path: "author",
+      select: "fullName email idNumber role profileImage",
+    };
+
+    const query = {
+      approved: true,
+      ...(before && { createdAt: { $lt: new Date(before) } }),
+    };
+
+    const posts = await Post.find(query)
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .populate(authorPopulate)
+      .lean();
+
+    const trimmedPosts = posts.map((post) => ({
+      ...post,
+      commentCount: post.comments?.length || 0,
+      comments: undefined,
+    }));
+
+    res.status(200).json({
+      success: true,
+      morePosts: trimmedPosts,
+    });
+  } catch (error) {
+    console.error("Error fetching more posts:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to load more posts." });
+  }
+});
 
 // ✅ POST /post/getComments — Get all comments for a post
 router.post("/getComments", async (req, res) => {
@@ -380,9 +474,6 @@ router.post("/getComments", async (req, res) => {
     });
   }
 });
-
-
-
 
 /// ✅ POST /post/addComment — Add a comment to a post
 router.post("/addComment", async (req, res) => {
@@ -460,8 +551,6 @@ router.post("/addComment", async (req, res) => {
   }
 });
 
-
-
 // ✅ POST /post/like — Like or unlike a post
 router.post("/like", async (req, res) => {
   try {
@@ -511,10 +600,6 @@ router.post("/like", async (req, res) => {
   }
 });
 
-
-
-
-
 // ✅ POST /post/save — Save or unsave a post
 router.post("/save", async (req, res) => {
   try {
@@ -539,7 +624,9 @@ router.post("/save", async (req, res) => {
 
     if (alreadySaved) {
       // Unsave post
-      user.savedPosts = user.savedPosts.filter((id) => id.toString() !== postId);
+      user.savedPosts = user.savedPosts.filter(
+        (id) => id.toString() !== postId
+      );
     } else {
       // Save post
       user.savedPosts.push(postId);
@@ -560,7 +647,5 @@ router.post("/save", async (req, res) => {
     });
   }
 });
-
-
 
 module.exports = router;

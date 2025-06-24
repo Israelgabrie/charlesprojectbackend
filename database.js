@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const userSchema = new mongoose.Schema(
   {
     fullName: { type: String, required: true },
+    canAutoPost: { type: Boolean, default: false },
+    isApproved: { type: Boolean, default: false },
     name: String,
     email: { type: String, unique: true, required: true },
     password: String,
@@ -31,14 +33,34 @@ const userSchema = new mongoose.Schema(
 );
 
 const User = mongoose.model("User", userSchema);
-
 const postSchema = new mongoose.Schema(
   {
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     content: String,
     image: String,
-    video: String, // <- NEW
+    video: String,
+
+    // 🟢 New fields
+    postType: {
+      type: String,
+      enum: ["normal", "announcement", "event", "news", "update", "general"],
+      default: "normal",
+    },
+    priority: {
+      type: String,
+      enum: ["low", "normal", "high","urgent"],
+      default: "normal",
+    },
+
     approved: { type: Boolean, default: false },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    approvedAt: { type: Date, default: null },
+    privacy: String,
+
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     comments: [
       {
@@ -92,7 +114,8 @@ const recentActivitySchema = new mongoose.Schema({
       "changePassword",
       "newPic",
       "delete",
-      "signUp"
+      "signUp",
+      "security"
     ],
     required: true,
   },
@@ -109,6 +132,23 @@ const reportSchema = new mongoose.Schema({
 });
 
 const Report = mongoose.model("Report", reportSchema);
+
+// async function approveAllUsers(){
+//   try {
+//     const users = await User.find();
+//     for (const user of users) {
+//       user.approved = true;
+//       console.log( user.approved)
+//       await user.save();
+//       console.log(`User ${user.fullName} approved successfully.`);
+//     }
+//     console.log("All unapproved users have been approved.");
+//   } catch (error) {
+//     console.error("Error approving users:", error);
+//   }
+// }
+
+// approveAllUsers();
 
 module.exports = {
   User,

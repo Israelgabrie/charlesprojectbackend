@@ -4,7 +4,7 @@ const { User, Post } = require("./database");
 async function getPendingPosts(id, callback) {
   try {
     const adminUser = await User.findById(id);
-    if (!adminUser || adminUser.role !== 'admin') {
+    if (!adminUser || adminUser.role !== "admin") {
       return callback({
         success: false,
         message: "Unauthorized: Only admins can view pending posts.",
@@ -13,7 +13,7 @@ async function getPendingPosts(id, callback) {
     }
 
     const pendingPosts = await Post.find({ approved: false })
-      .populate('author', 'fullName idNumber profilePic')
+      .populate("author", "fullName idNumber profilePic")
       .sort({ createdAt: -1 });
 
     callback({
@@ -21,7 +21,6 @@ async function getPendingPosts(id, callback) {
       message: "Pending posts retrieved successfully.",
       posts: pendingPosts,
     });
-
   } catch (error) {
     console.error("Error fetching pending posts:", error);
     callback({
@@ -47,10 +46,16 @@ async function getManageUsersStats(io, socket, id, callback) {
 
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    const usersLastWeek = await User.countDocuments({ createdAt: { $gte: oneWeekAgo } });
+    const usersLastWeek = await User.countDocuments({
+      createdAt: { $gte: oneWeekAgo },
+    });
 
     const totalStudents = await User.countDocuments({ role: "student" });
-    const allStudentUsers = await User.find({ role: "student" }).select("fullName email idNumber profileImage createdAt active");
+    const allStudentUsers = await User.find({ role: "student" }).select(
+      "fullName email idNumber profileImage createdAt active canAutoPost isApproved"
+    ).limit(20);
+    console.log("all students")
+    console.log(allStudentUsers)
 
     const stats = {
       success: true,
@@ -68,7 +73,6 @@ async function getManageUsersStats(io, socket, id, callback) {
     } else {
       socket.emit("dashboardStats", stats);
     }
-
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
     callback({
@@ -77,16 +81,19 @@ async function getManageUsersStats(io, socket, id, callback) {
     });
   }
 }
-
 async function getFilteredUsers(filterValue, callback) {
   try {
     let users;
-    console.log(filterValue)
+    console.log(filterValue);
 
     if (filterValue === "All") {
-      users = await User.find().select("fullName email idNumber profileImage createdAt active role");
+      users = await User.find({ role: "student" }).select(
+        "fullName email idNumber profileImage createdAt active role canAutoPost isApproved"
+      );
     } else if (filterValue === "active") {
-      users = await User.find({ active: true, role:"student" }).select("fullName email idNumber profileImage createdAt active role");
+      users = await User.find({ active: true, role: "student" }).select(
+        "fullName email idNumber profileImage createdAt active role canAutoPost isApproved"
+      );
     } else {
       return callback({
         success: false,
@@ -100,7 +107,6 @@ async function getFilteredUsers(filterValue, callback) {
       message: `Successfully retrieved ${filterValue} users.`,
       users,
     });
-
   } catch (error) {
     console.error("Error fetching filtered users:", error);
     callback({
@@ -111,7 +117,6 @@ async function getFilteredUsers(filterValue, callback) {
   }
 }
 
-
 async function getStudentUsers(io, socket, nameText, callback) {
   try {
     let query = { role: "student" };
@@ -121,14 +126,15 @@ async function getStudentUsers(io, socket, nameText, callback) {
       query.fullName = regex;
     }
 
-    const students = await User.find(query).select("fullName email idNumber profileImage createdAt active");
+    const students = await User.find(query).select(
+      "fullName email idNumber profileImage createdAt active canAutoPost isApproved"
+    );
 
     callback({
       success: true,
       message: "Student users retrieved successfully.",
       students,
     });
-
   } catch (error) {
     console.error("Error fetching student users:", error);
     callback({
@@ -140,11 +146,9 @@ async function getStudentUsers(io, socket, nameText, callback) {
 }
 
 
-
 module.exports = {
   getStudentUsers,
   getPendingPosts,
   getManageUsersStats,
-  getFilteredUsers
+  getFilteredUsers,
 };
-

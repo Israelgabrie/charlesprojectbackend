@@ -11,6 +11,7 @@ const {
   getStudentUsers,
 } = require("./adminSocket");
 
+
 // Routes
 const userRoutes = require("./addUsers");
 const userRouter = require("./userRoute");
@@ -67,6 +68,15 @@ app.use("/post", postRoutes); // Mount post router here
 
 // Serve uploaded media files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Serve frontend from dist
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// // Fallback to index.html for React routing
+// app.get('*', (req, res) => {
+//   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// });
+
+
 
 // Configure multer
 const storage = multer.diskStorage({
@@ -142,10 +152,12 @@ app.post("/deleteUser", async (req, res) => {
   let { userId } = req.body;
 
   try {
-    console.log(userId)
+    console.log(userId);
     console.log("deleting user(s):", userId);
     if (!userId || (Array.isArray(userId) && userId.length === 0)) {
-      return res.status(400).json({ success: false, message: "User ID(s) required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID(s) required" });
     }
 
     // Normalize to array
@@ -199,19 +211,105 @@ app.post("/deleteUser", async (req, res) => {
       await User.deleteOne({ _id: id });
     }
 
-    res.status(200).json({ success: true, message: "User(s) and related data deleted successfully" });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: "User(s) and related data deleted successfully",
+      });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+app.post("/approveUsers", async (req, res) => {
+  let { userId, revoke } = req.body;
+
+  try {
+    if (!userId || (Array.isArray(userId) && userId.length === 0)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID(s) required" });
+    }
+
+    // Normalize to array
+    if (!Array.isArray(userId)) {
+      userId = [userId];
+    }
+
+    for (const id of userId) {
+      const user = await User.findById(id);
+      if (!user) continue;
+
+      // Set isApproved based on whether we're revoking or approving
+      user.isApproved = revoke ? false : true;
+      await user.save();
+
+      await RecentActivity.create({
+        description: `User ${user.fullName} account ${revoke ? "revoked" : "approved"}.`,
+        actionType: "signUp",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `User(s) ${revoke ? "revoked" : "approved"} successfully.`,
+    });
+  } catch (error) {
+    console.error("Approval error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating approval status",
+    });
+  }
+});
+
+app.post("/setCanAutoPost", async (req, res) => {
+  const { userId, canAutoPost } = req.body;
+
+  try {
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID required" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    user.canAutoPost = Boolean(canAutoPost);
+    await user.save();
+
+    await RecentActivity.create({
+      description: `Updated canAutoPost for ${user.fullName} to ${user.canAutoPost}`,
+      actionType: "changePassword", // or create a new type like "permission"
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `canAutoPost updated to ${user.canAutoPost}`,
+    });
+  } catch (error) {
+    console.error("Auto-post update error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
 
 
 async function startServer() {
   try {
-    await mongoose.connect("mongodb+srv://isrealgabriel:isreal2005@cluster0.wtnbvoq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0");
+    // await mongoose.connect("mongodb://localhost:27017/campusConnect");
+     await mongoose.connect("mongodb+srv://isrealgabriel:isreal2005@cluster0.wtnbvoq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0");
     console.log("✅ Connected to MongoDB");
-
     const server = app.listen(portNumber, () => {
       console.log(`🚀 Server running on port ${portNumber}`);
     });
